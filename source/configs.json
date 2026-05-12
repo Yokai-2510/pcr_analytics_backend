@@ -1,0 +1,56 @@
+{
+  "ec2": {
+    "server_name": "index_pcr",
+    "ip_address": "3.111.218.114",
+    "pem_key_file": "index_pcr.pem",
+    "user": "ubuntu",
+    "region": "ap-south-1"
+  },
+  "backend": {
+    "timezone": "Asia/Kolkata",
+    "fetch_interval_seconds": 60,
+    "market_close_time": "15:30",
+    "upstox_base_url": "https://api.upstox.com/v2",
+    "upstox_token_url": "https://api.upstox.com/v2/login/authorization/token",
+    "api": {
+      "host": "0.0.0.0",
+      "port": 8000
+    },
+    "schedule": {
+      "api_mode": "always",
+      "weekdays": "Mon..Fri",
+      "worker_start_time": "09:10",
+      "worker_stop_time": "15:30",
+      "daily_restart_time": "08:55"
+    },
+    "paths": {
+      "db": "data/oi_data.db",
+      "logs": "logs",
+      "status": "data/status.json"
+    },
+    "http": {
+      "timeout_seconds": 15
+    },
+    "instruments": {
+      "nifty": {
+        "name": "Nifty",
+        "instrument_key": "NSE_INDEX|Nifty 50",
+        "strike_step": 50,
+        "strike_count": 5
+      },
+      "banknifty": {
+        "name": "BankNifty",
+        "instrument_key": "NSE_INDEX|Nifty Bank",
+        "strike_step": 100,
+        "strike_count": 5
+      },
+      "sensex": {
+        "name": "Sensex",
+        "instrument_key": "BSE_INDEX|SENSEX",
+        "strike_step": 100,
+        "strike_count": 5
+      }
+    },
+    "market_start_time": "09:10"
+  }
+}
