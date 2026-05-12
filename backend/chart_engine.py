@@ -545,7 +545,7 @@ def _format_strike(strike: Any) -> str:
 
 def _build_series(config: dict[str, Any], rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     series: list[dict[str, Any]] = []
-    if config["strike_mode"] == "aggregate":
+    if config["strike_mode"] in ("aggregate", "all"):
         for metric_id in config["metrics"]:
             metric = METRICS[metric_id]
             series.append(
@@ -590,7 +590,7 @@ def _build_series(config: dict[str, Any], rows: list[dict[str, Any]]) -> list[di
 
 def get_chart_data(config: dict[str, Any]) -> dict[str, Any]:
     normalized = _normalize_chart_config(config)
-    if normalized["strike_mode"] == "aggregate":
+    if normalized["strike_mode"] in ("aggregate", "all"):
         rows = _query_aggregate(normalized)
     else:
         rows = _query_strikes(normalized)

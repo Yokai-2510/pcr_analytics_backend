@@ -689,15 +689,11 @@ def filter_atm_window(payload: dict[str, Any]) -> dict[str, Any] | None:
     if spot is None:
         return None
     atm_strike = compute_atm(spot, instrument)
-    wanted = set(strike_range(atm_strike, instrument))
     return {
         **payload,
         "atm_strike": atm_strike,
         "strikes": [
-            row
-            for row in strikes
-            if isinstance(row, dict)
-            and safe_float(row.get("strike_price"), 0) in wanted
+            row for row in strikes if isinstance(row, dict)
         ],
     }
 
