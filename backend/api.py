@@ -82,6 +82,7 @@ class BackendConfigPatch(BaseModel):
     fetch_interval_seconds: int | None = Field(default=None, ge=1, le=3600)
     market_start_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
     market_close_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    market_open_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
     upstox_base_url: str | None = None
     upstox_token_url: str | None = None
     api: ApiSettingsPatch | None = None
@@ -311,6 +312,7 @@ def get_config_schema() -> dict[str, Any]:
             "fetch_interval_seconds": "integer",
             "market_start_time": "HH:MM",
             "market_close_time": "HH:MM",
+            "market_open_time": "HH:MM",
             "upstox_base_url": "url",
             "upstox_token_url": "url",
             "api": {"host": "string", "port": "integer"},

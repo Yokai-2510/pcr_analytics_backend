@@ -35,6 +35,7 @@ DEFAULT_BACKEND_CONFIG: dict[str, Any] = {
     "fetch_interval_seconds": 60,
     "market_start_time": "09:10",
     "market_close_time": "15:30",
+    "market_open_time": "09:15",
     "upstox_base_url": "https://api.upstox.com/v2",
     "upstox_token_url": "https://api.upstox.com/v2/login/authorization/token",
     "api": {"host": "0.0.0.0", "port": 8000},
@@ -287,11 +288,12 @@ def update_backend_config(updates: dict[str, Any]) -> dict[str, Any]:
         "fetch_interval_seconds",
         "market_start_time",
         "market_close_time",
+        "market_open_time",
         "upstox_base_url",
         "upstox_token_url",
     }
     top_updates = {key: value for key, value in updates.items() if key in allowed_top}
-    validate_time_fields(top_updates, {"market_start_time", "market_close_time"})
+    validate_time_fields(top_updates, {"market_start_time", "market_close_time", "market_open_time"})
     _merge_allowed(backend, top_updates, allowed_top)
 
     if "api" in updates:
@@ -493,6 +495,30 @@ def market_close_datetime(day: datetime | None = None) -> datetime:
     )
 
 
+def market_open_datetime(day: datetime | None = None) -> datetime:
+    """Return the precise market-open datetime (default 09:15)."""
+    current = day or now_ist()
+    cfg = app_config()
+    open_t = parse_hhmm(str(cfg.get("market_open_time") or cfg["market_start_time"]))
+    return current.replace(
+        hour=open_t.hour,
+        minute=open_t.minute,
+        second=0,
+        microsecond=0,
+    )
+
+
+def wait_until_market_open() -> None:
+    """Block until the precise market-open time (09:15:00 by default)."""
+    target = market_open_datetime()
+    now = now_ist()
+    if now >= target:
+        return
+    seconds = (target - now).total_seconds()
+    logger.info("Waiting %.1fs until market open at %s", seconds, target.time().isoformat())
+    time.sleep(seconds)
+
+
 def is_trading_weekday(day: datetime | None = None) -> bool:
     current = day or now_ist()
     return current.weekday() < 5
@@ -500,9 +526,12 @@ def is_trading_weekday(day: datetime | None = None) -> bool:
 
 def market_session_active(now: datetime | None = None) -> bool:
     current = now or now_ist()
+    cfg = app_config()
+    open_t = parse_hhmm(str(cfg.get("market_open_time") or cfg["market_start_time"]))
+    open_dt = current.replace(hour=open_t.hour, minute=open_t.minute, second=0, microsecond=0)
     return (
         is_trading_weekday(current)
-        and market_start_datetime(current) <= current < market_close_datetime(current)
+        and open_dt <= current < market_close_datetime(current)
     )
 
 
@@ -510,7 +539,13 @@ def market_session_state(now: datetime | None = None) -> str:
     current = now or now_ist()
     if not is_trading_weekday(current):
         return "closed_weekend"
-    if current < market_start_datetime(current):
+    # Use market_open_time (default 09:15) for the "live" check so the
+    # worker waits until the exchange actually opens, not just when the
+    # systemd timer starts it.
+    cfg = app_config()
+    open_t = parse_hhmm(str(cfg.get("market_open_time") or cfg["market_start_time"]))
+    open_dt = current.replace(hour=open_t.hour, minute=open_t.minute, second=0, microsecond=0)
+    if current < open_dt:
         return "waiting_for_open"
     if current >= market_close_datetime(current):
         return "closed"
@@ -519,13 +554,13 @@ def market_session_state(now: datetime | None = None) -> str:
 
 def next_market_open(now: datetime | None = None) -> datetime:
     current = now or now_ist()
-    candidate = market_start_datetime(current)
+    candidate = market_open_datetime(current)
     if is_trading_weekday(current) and current < candidate:
         return candidate
 
-    candidate = market_start_datetime(current + timedelta(days=1))
+    candidate = market_open_datetime(current + timedelta(days=1))
     while not is_trading_weekday(candidate):
-        candidate = market_start_datetime(candidate + timedelta(days=1))
+        candidate = market_open_datetime(candidate + timedelta(days=1))
     return candidate
 
 

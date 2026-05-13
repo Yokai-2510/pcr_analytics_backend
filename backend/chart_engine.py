@@ -11,13 +11,11 @@ import data_processor
 import utilities as utils
 
 BASELINES = {"post_settlement", "prev_close", "market_open"}
-# market_open is an alias for the first-of-day snapshot baseline which is
-# stored under baseline_type='post_settlement' in the SQLite table.
-BASELINE_DB_ALIAS = {"market_open": "post_settlement"}
+BASELINE_DB_ALIAS: dict[str, str] = {}  # no aliases needed; all are real types
 BASELINE_LABELS = [
-    {"id": "prev_close", "label": "Previous Day", "description": "Last snapshot of the previous trading day."},
-    {"id": "post_settlement", "label": "Post Settlement", "description": "Frozen snapshot taken right after market open."},
-    {"id": "market_open", "label": "Market Open", "description": "First snapshot of today (same as post settlement)."},
+    {"id": "prev_close", "label": "Previous Day Close", "description": "Option chain captured before market open (08:55) — previous day's closing OI."},
+    {"id": "market_open", "label": "Market Open", "description": "First snapshot exactly at market open (09:15:00)."},
+    {"id": "post_settlement", "label": "Post Settlement", "description": "Snapshot after initial settlement / first full tick."},
 ]
 STRIKE_MODES = {"aggregate", "atm_window", "custom", "all"}
 

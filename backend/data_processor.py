@@ -309,15 +309,29 @@ def persist_market_data(raw_data: dict[str, dict[str, Any] | None]) -> dict[str,
     return summary
 
 
+def count_baseline_rows(baseline_type: str, date: str) -> dict[str, int]:
+    """Return how many baseline rows already exist per instrument."""
+    counts: dict[str, int] = {}
+    with connect() as conn:
+        for instrument in utils.instrument_names():
+            row = conn.execute(
+                "SELECT COUNT(*) AS rows FROM daily_baselines "
+                "WHERE date = ? AND baseline_type = ? AND instrument = ?",
+                (date, baseline_type, instrument),
+            ).fetchone()
+            counts[instrument] = int(row["rows"]) if row else 0
+    return counts
+
+
 def save_baseline(baseline_type: str, date: str | None = None) -> dict[str, int]:
-    if baseline_type not in {"post_settlement", "prev_close"}:
-        raise ValueError("baseline_type must be post_settlement or prev_close")
+    if baseline_type not in {"post_settlement", "prev_close", "market_open"}:
+        raise ValueError("baseline_type must be post_settlement, prev_close, or market_open")
 
     baseline_date = date or utils.today_ist()
     counts: dict[str, int] = {}
     with connect() as conn:
         for instrument in utils.instrument_names():
-            if baseline_type == "post_settlement":
+            if baseline_type in ("post_settlement", "market_open"):
                 existing = conn.execute(
                     """
                     SELECT COUNT(*) AS rows
