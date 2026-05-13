@@ -128,21 +128,33 @@ def distinct_values(
     date: str | None = None,
     limit: int = 500,
 ) -> list[Any]:
-    if column not in data_processor.SNAPSHOT_COLUMNS:
+    # 'date' is a virtual column extracted from timestamp
+    if column not in data_processor.SNAPSHOT_COLUMNS and column != "date":
         raise ValueError(f"unknown column: {column}")
+
+    select_expr = column
     where: list[str] = []
     params: list[Any] = []
+
     if instrument:
         where.append("instrument = ?")
         params.append(utils.normalize_instrument_name(instrument))
-    if date:
-        where.append("substr(timestamp, 1, 10) = ?")
-        params.append(date)
+
+    if column == "date":
+        select_expr = "DISTINCT substr(timestamp, 1, 10) AS value"
+        if date:
+            where.append("substr(timestamp, 1, 10) = ?")
+            params.append(date)
+    else:
+        select_expr = f"DISTINCT {column}"
+        if date:
+            where.append("substr(timestamp, 1, 10) = ?")
+            params.append(date)
 
     clause = f"WHERE {' AND '.join(where)}" if where else ""
     query = (
-        f"SELECT DISTINCT {column} AS value FROM oi_snapshots "
-        f"{clause} ORDER BY value LIMIT {int(limit)}"
+        f"SELECT {select_expr} AS value FROM oi_snapshots "
+        f"{clause} ORDER BY value DESC LIMIT {int(limit)}"
     )
     with data_processor.connect() as conn:
         rows = conn.execute(query, tuple(params)).fetchall()
