@@ -141,7 +141,7 @@ def distinct_values(
         params.append(utils.normalize_instrument_name(instrument))
 
     if column == "date":
-        select_expr = "DISTINCT substr(timestamp, 1, 10) AS value"
+        select_expr = "DISTINCT substr(timestamp, 1, 10)"
         if date:
             where.append("substr(timestamp, 1, 10) = ?")
             params.append(date)
