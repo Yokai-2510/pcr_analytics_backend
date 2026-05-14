@@ -330,16 +330,23 @@ def _aggregate_latest_for(instrument: str, date: str) -> dict[str, Any] | None:
             (instrument, instrument, date),
         ).fetchone()
 
-        baseline = conn.execute(
-            """
-            SELECT
-                SUM(COALESCE(ce_oi, 0)) AS ce_oi,
-                SUM(COALESCE(pe_oi, 0)) AS pe_oi
-            FROM daily_baselines
-            WHERE date = ? AND baseline_type = 'post_settlement' AND instrument = ?
-            """,
-            (date, instrument),
-        ).fetchone()
+        # Fetch all 3 baselines: prev_close, market_open, post_settlement
+        baselines: dict[str, dict[str, Any]] = {}
+        for btype in ("prev_close", "market_open", "post_settlement"):
+            brow = conn.execute(
+                """
+                SELECT
+                    SUM(COALESCE(ce_oi, 0)) AS ce_oi,
+                    SUM(COALESCE(pe_oi, 0)) AS pe_oi
+                FROM daily_baselines
+                WHERE date = ? AND baseline_type = ? AND instrument = ?
+                """,
+                (date, btype, instrument),
+            ).fetchone()
+            baselines[btype] = {
+                "ce_oi": brow["ce_oi"] if brow else None,
+                "pe_oi": brow["pe_oi"] if brow else None,
+            }
 
     open_spot = first and first["spot"]
     spot = agg and agg["spot"]
@@ -349,8 +356,27 @@ def _aggregate_latest_for(instrument: str, date: str) -> dict[str, Any] | None:
         if change_abs is not None and open_spot
         else None
     )
-    base_ce = baseline and baseline["ce_oi"]
-    base_pe = baseline and baseline["pe_oi"]
+
+    # Use post_settlement as the primary baseline for backward compat
+    base_ce = baselines["post_settlement"]["ce_oi"]
+    base_pe = baselines["post_settlement"]["pe_oi"]
+
+    # Helper: compute change from a baseline type
+    def _oi_change(btype: str) -> dict[str, Any]:
+        b = baselines.get(btype) or {}
+        bc = b.get("ce_oi")
+        bp = b.get("pe_oi")
+        return {
+            "ce_oi_change": (agg["total_ce_oi"] - bc) if bc is not None else None,
+            "pe_oi_change": (agg["total_pe_oi"] - bp) if bp is not None else None,
+        }
+
+    pc = _oi_change("prev_close")
+
+    # ΔPCR = ΔPE (from prev_close) / ΔCE (from prev_close)
+    delta_pcr = None
+    if pc["ce_oi_change"] is not None and pc["pe_oi_change"] is not None and pc["ce_oi_change"] != 0:
+        delta_pcr = pc["pe_oi_change"] / pc["ce_oi_change"]
 
     return {
         "timestamp": ts,
@@ -360,6 +386,7 @@ def _aggregate_latest_for(instrument: str, date: str) -> dict[str, Any] | None:
         "change_pct": change_pct,
         "atm_strike": agg["atm_strike"],
         "pcr": agg["pcr"],
+        "delta_pcr": delta_pcr,
         "total_ce_oi": agg["total_ce_oi"],
         "total_pe_oi": agg["total_pe_oi"],
         "total_ce_volume": agg["total_ce_volume"],
@@ -370,6 +397,24 @@ def _aggregate_latest_for(instrument: str, date: str) -> dict[str, Any] | None:
         "snapshot_rows": agg["rows"],
         "baseline_ce_oi": base_ce,
         "baseline_pe_oi": base_pe,
+        # All 3 baselines with OI values
+        "baselines": {
+            "prev_close": {
+                "ce_oi": baselines["prev_close"]["ce_oi"],
+                "pe_oi": baselines["prev_close"]["pe_oi"],
+                **_oi_change("prev_close"),
+            },
+            "market_open": {
+                "ce_oi": baselines["market_open"]["ce_oi"],
+                "pe_oi": baselines["market_open"]["pe_oi"],
+                **_oi_change("market_open"),
+            },
+            "post_settlement": {
+                "ce_oi": baselines["post_settlement"]["ce_oi"],
+                "pe_oi": baselines["post_settlement"]["pe_oi"],
+                **_oi_change("post_settlement"),
+            },
+        },
     }
 
 
