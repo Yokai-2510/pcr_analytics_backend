@@ -373,10 +373,17 @@ def _aggregate_latest_for(instrument: str, date: str) -> dict[str, Any] | None:
 
     pc = _oi_change("prev_close")
 
-    # ΔPCR = ΔPE (from prev_close) / ΔCE (from prev_close)
+    # ΔPCR = current PCR − previous close PCR
+    # where PCR = total_PE_OI / total_CE_OI at each point
     delta_pcr = None
-    if pc["ce_oi_change"] is not None and pc["pe_oi_change"] is not None and pc["ce_oi_change"] != 0:
-        delta_pcr = pc["pe_oi_change"] / pc["ce_oi_change"]
+    prev_ce = baselines["prev_close"]["ce_oi"]
+    prev_pe = baselines["prev_close"]["pe_oi"]
+    if (agg["total_ce_oi"] and agg["total_ce_oi"] > 0 and
+            prev_ce is not None and prev_ce > 0):
+        current_pcr = agg["total_pe_oi"] / agg["total_ce_oi"]
+        prev_pcr = prev_pe / prev_ce if prev_pe is not None else None
+        if prev_pcr is not None:
+            delta_pcr = current_pcr - prev_pcr
 
     return {
         "timestamp": ts,
