@@ -13,6 +13,9 @@ import utilities as utils
 
 logger = logging.getLogger(__name__)
 
+# Pre-open cache — resolved once before market open, consumed on first tick.
+_preopen_expiries: dict[str, str] | None = None
+
 
 def run_fetch_tick(expiries: dict[str, str]) -> dict[str, object]:
     raw_data = market_data.fetch_option_chains(expiries)
@@ -30,11 +33,25 @@ def run_fetch_tick(expiries: dict[str, str]) -> dict[str, object]:
     return {"fetch": fetch_summary, "persist": persist_summary}
 
 
-def start_session(session_date: str) -> dict[str, str]:
+def _prepare_session(date: str) -> dict[str, str]:
+    """Resolve token + expiries.  Called during pre-open or on first tick."""
     broker_api.get_token()
     expiries = broker_api.resolve_all_expiries(force=True)
-    logger.info("Market collector session started for %s: %s", session_date, expiries)
+    logger.info("Session prepared for %s: %s", date, expiries)
     return expiries
+
+
+def start_session(session_date: str) -> dict[str, str]:
+    """Start a market session, using pre-resolved expiries if available."""
+    global _preopen_expiries
+    if _preopen_expiries is not None:
+        expiries = _preopen_expiries
+        _preopen_expiries = None
+        logger.info("Market collector session started for %s (pre-resolved expiries): %s",
+                     session_date, expiries)
+        return expiries
+    # Fallback: resolve now (shouldn't happen in normal flow)
+    return _prepare_session(session_date)
 
 
 def exchange_market_state() -> tuple[str, dict[str, object] | None]:
@@ -58,8 +75,7 @@ def _save_prev_close_baseline() -> None:
         return
 
     try:
-        broker_api.get_token()
-        expiries = broker_api.resolve_all_expiries(force=True)
+        expiries = _prepare_session(today)
     except Exception:
         logger.exception("Failed to resolve expiries for prev_close baseline")
         return
@@ -76,6 +92,22 @@ def _save_prev_close_baseline() -> None:
         "✅ prev_close baseline recorded at %s for %s: %s",
         utils.iso_now(), today, counts,
     )
+
+
+def _preopen_prepare(today: str) -> None:
+    """Pre-resolve expiries while waiting for market open.
+
+    This ensures the first fetch tick happens at exactly 09:15:00 instead of
+    09:16:00 (because resolving 3 instrument expiries takes ~60 seconds).
+    """
+    global _preopen_expiries
+    if _preopen_expiries is not None:
+        return  # Already resolved
+    try:
+        _preopen_expiries = _prepare_session(today)
+        logger.info("✅ Pre-open expiries resolved at %s", utils.iso_now())
+    except Exception:
+        logger.exception("Pre-open expiry resolution failed; will retry at market open")
 
 
 def _post_settlement_ready() -> bool:
@@ -138,6 +170,8 @@ def run_market_session() -> None:
             return
 
         if configured_state != "live":
+            # ── Pre-open: resolve expiries early so first tick is at 09:15 ──
+            _preopen_prepare(today)
             utils.set_status(
                 running=True,
                 collector_running=False,
@@ -170,9 +204,6 @@ def run_market_session() -> None:
                 market_open_saved = False
 
                 # ── Wait until precise market-open time (09:15:00) ────────
-                # The systemd timer starts the worker at 09:10 but NSE opens
-                # at 09:15.  Block here so the first tick is at 09:15:00
-                # instead of 09:11 or 09:16.
                 utils.wait_until_market_open()
 
             run_fetch_tick(expiries or {})
@@ -188,8 +219,6 @@ def run_market_session() -> None:
                 )
 
             # ── Save post_settlement baseline after settlement delay ─────
-            # Wait until settlement_delay_minutes past market open so the
-            # baseline captures OI after the initial post-open churn.
             if not post_settlement_saved and _post_settlement_ready():
                 data_processor.save_baseline("post_settlement", date=session_date)
                 post_settlement_saved = True
