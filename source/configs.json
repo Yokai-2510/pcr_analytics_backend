@@ -8,7 +8,7 @@
   },
   "backend": {
     "timezone": "Asia/Kolkata",
-    "fetch_interval_seconds": 60,
+    "fetch_interval_seconds": 30,
     "market_close_time": "15:30",
     "upstox_base_url": "https://api.upstox.com/v2",
     "upstox_token_url": "https://api.upstox.com/v2/login/authorization/token",

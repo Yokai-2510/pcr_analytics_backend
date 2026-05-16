@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from datetime import timedelta
 
 import broker_api
@@ -17,10 +18,13 @@ logger = logging.getLogger(__name__)
 _preopen_expiries: dict[str, str] | None = None
 
 
-def run_fetch_tick(expiries: dict[str, str]) -> dict[str, object]:
+def run_fetch_tick(expiries: dict[str, str], *, persist: bool = True) -> dict[str, object]:
     raw_data = market_data.fetch_option_chains(expiries)
     fetch_summary = market_data.summarize_fetch(raw_data)
-    persist_summary = data_processor.persist_market_data(raw_data)
+    if persist:
+        persist_summary = data_processor.persist_market_data(raw_data)
+    else:
+        persist_summary = {"skipped": True}
     utils.set_status(
         running=True,
         collector_running=True,
@@ -132,6 +136,7 @@ def run_market_session() -> None:
     post_settlement_saved = False
     market_open_saved = False
     prev_close_saved = False
+    last_persist_epoch: float = 0.0
 
     # ── Phase 0: Record prev_close baseline (08:55 daily restart) ────────
     # The API is already running; the broker returns *yesterday's* option
@@ -202,11 +207,18 @@ def run_market_session() -> None:
                 expiries = start_session(session_date)
                 post_settlement_saved = False
                 market_open_saved = False
+                last_persist_epoch = 0.0
 
                 # ── Wait until precise market-open time (09:15:00) ────────
                 utils.wait_until_market_open()
 
-            run_fetch_tick(expiries or {})
+            # Fetch every 30s but persist (log) only every 60s.
+            # Always fetch to keep status/current price fresh.
+            now_epoch = time.time()
+            persist_this_tick = (now_epoch - last_persist_epoch) >= 55.0  # ~60s guard
+            run_fetch_tick(expiries or {}, persist=persist_this_tick)
+            if persist_this_tick:
+                last_persist_epoch = now_epoch
             utils.set_status(exchange_status=exchange_status)
 
             # ── Save market_open baseline on the very first tick ──────────

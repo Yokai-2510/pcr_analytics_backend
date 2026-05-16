@@ -32,7 +32,7 @@ DEFAULT_USER_PREFS: dict[str, Any] = {
 
 DEFAULT_BACKEND_CONFIG: dict[str, Any] = {
     "timezone": "Asia/Kolkata",
-    "fetch_interval_seconds": 30,
+    "fetch_interval_seconds": 30,  # fetch every 30s, persist every 60s
     "market_start_time": "09:10",
     "market_close_time": "15:30",
     "market_open_time": "09:15",
