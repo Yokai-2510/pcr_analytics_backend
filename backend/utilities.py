@@ -36,6 +36,7 @@ DEFAULT_BACKEND_CONFIG: dict[str, Any] = {
     "market_start_time": "09:10",
     "market_close_time": "15:30",
     "market_open_time": "09:15",
+    "settlement_delay_minutes": 5,
     "upstox_base_url": "https://api.upstox.com/v2",
     "upstox_token_url": "https://api.upstox.com/v2/login/authorization/token",
     "api": {"host": "0.0.0.0", "port": 8000},

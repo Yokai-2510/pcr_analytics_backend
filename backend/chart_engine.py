@@ -256,6 +256,28 @@ METRICS: dict[str, MetricDef] = {
         aggregate_sql="AVG(s.pe_iv)",
         strike_sql="AVG(s.pe_iv)",
     ),
+    "delta_pcr": MetricDef(
+        id="delta_pcr",
+        label="ΔPCR (OI Change)",
+        group="ratio",
+        description="Ratio of change in PE OI to change in CE OI from the selected baseline. Values above 1 indicate puts gaining OI faster than calls.",
+        unit="ratio",
+        color="#c084fc",
+        axis="left",
+        aggregate_sql=(
+            "CASE WHEN SUM(COALESCE(s.ce_oi, 0) - COALESCE(b.ce_oi, 0)) > 0 THEN "
+            "SUM(COALESCE(s.pe_oi, 0) - COALESCE(b.pe_oi, 0)) / "
+            "SUM(COALESCE(s.ce_oi, 0) - COALESCE(b.ce_oi, 0)) "
+            "ELSE NULL END"
+        ),
+        strike_sql=(
+            "CASE WHEN (COALESCE(s.ce_oi, 0) - COALESCE(b.ce_oi, 0)) > 0 THEN "
+            "(COALESCE(s.pe_oi, 0) - COALESCE(b.pe_oi, 0)) / "
+            "(COALESCE(s.ce_oi, 0) - COALESCE(b.ce_oi, 0)) "
+            "ELSE NULL END"
+        ),
+        requires_baseline=True,
+    ),
 }
 
 

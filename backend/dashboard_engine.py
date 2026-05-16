@@ -373,17 +373,13 @@ def _aggregate_latest_for(instrument: str, date: str) -> dict[str, Any] | None:
 
     pc = _oi_change("prev_close")
 
-    # ΔPCR = current PCR − previous close PCR
-    # where PCR = total_PE_OI / total_CE_OI at each point
+    # ΔPCR = change in PE OI / change in CE OI  (ratio of OI changes)
     delta_pcr = None
-    prev_ce = baselines["prev_close"]["ce_oi"]
-    prev_pe = baselines["prev_close"]["pe_oi"]
-    if (agg["total_ce_oi"] and agg["total_ce_oi"] > 0 and
-            prev_ce is not None and prev_ce > 0):
-        current_pcr = agg["total_pe_oi"] / agg["total_ce_oi"]
-        prev_pcr = prev_pe / prev_ce if prev_pe is not None else None
-        if prev_pcr is not None:
-            delta_pcr = current_pcr - prev_pcr
+    pc = _oi_change("prev_close")
+    ce_change = pc.get("ce_oi_change")
+    pe_change = pc.get("pe_oi_change")
+    if ce_change is not None and ce_change > 0 and pe_change is not None:
+        delta_pcr = pe_change / ce_change
 
     return {
         "timestamp": ts,
@@ -464,7 +460,17 @@ def _market_sentiment(pcr: float | None) -> dict[str, Any]:
     return {"label": "neutral", "score": 0, "tone": "neutral"}
 
 
+def _latest_date_with_data() -> str | None:
+    """Return the most recent date that has snapshot data, or None."""
+    with data_processor.connect() as conn:
+        row = conn.execute(
+            "SELECT MAX(substr(timestamp, 1, 10)) AS d FROM oi_snapshots"
+        ).fetchone()
+        return row["d"] if row and row["d"] else None
+
+
 def dashboard_summary(date: str | None = None, *, spark_points: int = 60) -> dict[str, Any]:
+    requested_date = date
     today = (date or utils.today_ist())[:10]
     instruments = utils.instrument_names()
 
@@ -496,6 +502,14 @@ def dashboard_summary(date: str | None = None, *, spark_points: int = 60) -> dic
             "spark": spark,
             **latest,
         })
+
+    # ── Weekend / holiday fallback ──────────────────────────────────────
+    # If no explicit date was requested and today has no data at all,
+    # automatically fall back to the most recent date that does.
+    if requested_date is None and not any(r.get("available") for r in summary):
+        fallback_date = _latest_date_with_data()
+        if fallback_date and fallback_date != today:
+            return dashboard_summary(fallback_date, spark_points=spark_points)
 
     status = utils.service_status()
     totals_ce = sum((row.get("total_ce_oi") or 0) for row in summary if row.get("available"))

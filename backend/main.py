@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from datetime import timedelta
 
 import broker_api
 import data_processor
@@ -75,6 +76,22 @@ def _save_prev_close_baseline() -> None:
         "✅ prev_close baseline recorded at %s for %s: %s",
         utils.iso_now(), today, counts,
     )
+
+
+def _post_settlement_ready() -> bool:
+    """Return True if we're at least 5 minutes past market open.
+
+    The post_settlement baseline should capture OI *after* the initial
+    post-open churn has settled, not the very first tick.  We use the
+    configured ``market_open_time`` (default 09:15) and wait until
+    ``settlement_delay_minutes`` past that.
+    """
+    cfg = utils.app_config()
+    settlement_delay = int(cfg.get("settlement_delay_minutes", 5))
+    open_t = utils.parse_hhmm(str(cfg.get("market_open_time") or cfg["market_start_time"]))
+    now = utils.now_ist()
+    open_dt = now.replace(hour=open_t.hour, minute=open_t.minute, second=0, microsecond=0)
+    return now >= open_dt + timedelta(minutes=settlement_delay)
 
 
 def run_market_session() -> None:
@@ -170,10 +187,16 @@ def run_market_session() -> None:
                     utils.iso_now(), session_date,
                 )
 
-            # ── Save post_settlement baseline after first tick ────────────
-            if not post_settlement_saved:
+            # ── Save post_settlement baseline after settlement delay ─────
+            # Wait until settlement_delay_minutes past market open so the
+            # baseline captures OI after the initial post-open churn.
+            if not post_settlement_saved and _post_settlement_ready():
                 data_processor.save_baseline("post_settlement", date=session_date)
                 post_settlement_saved = True
+                logger.info(
+                    "✅ post_settlement baseline recorded at %s for %s",
+                    utils.iso_now(), session_date,
+                )
 
             utils.wait_until_next_fetch()
             continue
