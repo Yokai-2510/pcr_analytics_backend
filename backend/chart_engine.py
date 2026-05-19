@@ -278,6 +278,40 @@ METRICS: dict[str, MetricDef] = {
         ),
         requires_baseline=True,
     ),
+    "ce_oi_cumm": MetricDef(
+        id="ce_oi_cumm",
+        label="CE Cumulative OI Change",
+        group="open_interest",
+        description="Cumulative call OI change from first tick of the day.",
+        unit="contracts",
+        color="#86efac",
+        axis="left",
+        aggregate_sql=(
+            "SUM(COALESCE(s.ce_oi, 0)) - COALESCE("
+            "(SELECT SUM(COALESCE(f.ce_oi, 0)) FROM oi_snapshots f "
+            "WHERE f.instrument = s.instrument AND f.timestamp = "
+            "(SELECT MIN(timestamp) FROM oi_snapshots "
+            "WHERE instrument = s.instrument AND substr(timestamp, 1, 10) = substr(s.timestamp, 1, 10))), 0)"
+        ),
+        strike_sql="AVG(s.ce_oi)",
+    ),
+    "pe_oi_cumm": MetricDef(
+        id="pe_oi_cumm",
+        label="PE Cumulative OI Change",
+        group="open_interest",
+        description="Cumulative put OI change from first tick of the day.",
+        unit="contracts",
+        color="#fca5a5",
+        axis="left",
+        aggregate_sql=(
+            "SUM(COALESCE(s.pe_oi, 0)) - COALESCE("
+            "(SELECT SUM(COALESCE(f.pe_oi, 0)) FROM oi_snapshots f "
+            "WHERE f.instrument = s.instrument AND f.timestamp = "
+            "(SELECT MIN(timestamp) FROM oi_snapshots "
+            "WHERE instrument = s.instrument AND substr(timestamp, 1, 10) = substr(s.timestamp, 1, 10))), 0)"
+        ),
+        strike_sql="AVG(s.pe_oi)",
+    ),
 }
 
 
