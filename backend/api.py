@@ -381,6 +381,24 @@ def reveal_credentials() -> dict[str, Any]:
     return utils.full_credentials()
 
 
+@app.post("/api/upstox/refresh-token", dependencies=[Depends(require_admin)])
+def refresh_upstox_token(force: bool = True) -> dict[str, Any]:
+    """Run the Playwright login flow to fetch a fresh access_token and persist it.
+
+    Blocks until the browser-driven login completes (~30-60s). Returns the new
+    token's preview and the saved credential state on success.
+    """
+    try:
+        import upstox_auth
+
+        result = upstox_auth.refresh_access_token(force=force)
+        return {"success": True, **result}
+    except Exception as exc:  # noqa: BLE001
+        logger = __import__("logging").getLogger(__name__)
+        logger.exception("refresh_access_token failed")
+        return {"success": False, "error": str(exc)}
+
+
 @app.post("/api/upstox/test", dependencies=[Depends(require_admin)])
 def test_upstox() -> dict[str, Any]:
     """Confirm whichever token the backend is using can reach Upstox.

@@ -111,10 +111,29 @@ def run_fetch_tick(expiries: dict[str, str], *, persist: bool = True) -> dict[st
 
 def _prepare_session(date: str) -> dict[str, str]:
     """Resolve token + expiries.  Called during pre-open or on first tick."""
+    _refresh_access_token_safely()
     broker_api.get_token()
     expiries = broker_api.resolve_all_expiries(force=True)
     logger.info("Session prepared for %s: %s", date, expiries)
     return expiries
+
+
+def _refresh_access_token_safely() -> None:
+    """Refresh the Upstox access_token via Playwright before the session begins.
+
+    Best-effort: any failure is logged but doesn't block the worker, since the
+    existing token (analytics_token fallback) may still cover market endpoints.
+    """
+    try:
+        import upstox_auth
+
+        result = upstox_auth.refresh_access_token(force=False)
+        if result.get("refreshed"):
+            logger.info("✅ access_token refreshed for session: %s", result.get("token_preview"))
+        else:
+            logger.info("access_token refresh skipped: %s", result.get("reason"))
+    except Exception:
+        logger.exception("access_token refresh failed; continuing with existing token")
 
 
 def start_session(session_date: str) -> dict[str, str]:

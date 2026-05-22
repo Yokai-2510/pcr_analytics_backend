@@ -3,3 +3,5 @@ fastapi
 uvicorn
 pandas
 python-dateutil
+playwright
+pyotp
