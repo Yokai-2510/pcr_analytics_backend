@@ -22,13 +22,14 @@ class BrokerAPIError(RuntimeError):
 
 
 def _credential_token(creds: dict[str, Any]) -> str | None:
-    # Only the regular Upstox access_token is honoured. The analytics_token is
-    # read-only and Upstox rejects it on /user endpoints, and `token` was an
-    # older fallback that's no longer populated. An external service refreshes
-    # access_token at ~08:00 IST each trading day.
-    value = creds.get("access_token")
-    if isinstance(value, str) and value.strip():
-        return value.strip()
+    # Prefer access_token, but fall back to analytics_token / legacy token so
+    # the worker keeps running on whatever credential is currently populated.
+    # /user/profile only accepts a real access_token, so the Settings Test
+    # button will still surface a clear error when only analytics_token is set.
+    for key in ("access_token", "analytics_token", "token"):
+        value = creds.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     return None
 
 
