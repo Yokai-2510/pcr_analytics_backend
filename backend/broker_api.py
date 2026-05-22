@@ -22,10 +22,13 @@ class BrokerAPIError(RuntimeError):
 
 
 def _credential_token(creds: dict[str, Any]) -> str | None:
-    for key in ("access_token", "analytics_token", "token"):
-        value = creds.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+    # Only the regular Upstox access_token is honoured. The analytics_token is
+    # read-only and Upstox rejects it on /user endpoints, and `token` was an
+    # older fallback that's no longer populated. An external service refreshes
+    # access_token at ~08:00 IST each trading day.
+    value = creds.get("access_token")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return None
 
 
