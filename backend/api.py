@@ -383,13 +383,40 @@ def reveal_credentials() -> dict[str, Any]:
 
 @app.post("/api/upstox/test", dependencies=[Depends(require_admin)])
 def test_upstox() -> dict[str, Any]:
+    """Confirm whichever token the backend is using can reach Upstox.
+
+    Tries /user/profile first (gives username when an access_token is set),
+    then falls back to /market/status/NSE — the same endpoint the worker
+    depends on. Returns connected=True if either succeeds, so a read-only
+    analytics_token (which can fetch market data but not /user/profile)
+    still surfaces as a working connection.
+    """
+    out: dict[str, Any] = {
+        "connected": False,
+        "profile": None,
+        "market": None,
+        "token_kind": None,
+        "errors": {},
+    }
     try:
-        profile = broker_api.get_user_profile()
+        out["profile"] = broker_api.get_user_profile()
+        out["token_kind"] = "access_token"
     except broker_api.BrokerAPIError as exc:
-        return {"connected": False, "error": str(exc), "status_code": exc.status_code}
+        out["errors"]["profile"] = str(exc)
     except Exception as exc:  # noqa: BLE001
-        return {"connected": False, "error": str(exc)}
-    return {"connected": True, "profile": profile}
+        out["errors"]["profile"] = str(exc)
+
+    try:
+        out["market"] = broker_api.get_exchange_status("NSE")
+        if out["token_kind"] is None:
+            out["token_kind"] = "analytics_token"
+    except broker_api.BrokerAPIError as exc:
+        out["errors"]["market"] = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        out["errors"]["market"] = str(exc)
+
+    out["connected"] = out["profile"] is not None or out["market"] is not None
+    return out
 
 
 @app.patch("/api/credentials/upstox", dependencies=[Depends(require_admin)])
