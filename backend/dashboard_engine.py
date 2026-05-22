@@ -441,7 +441,7 @@ def _spark_series(instrument: str, date: str, *, limit: int = 60) -> dict[str, l
         ).fetchall()
     rows = list(reversed(rows))
     return {
-        "timestamps": [row["timestamp"] for row in rows],
+        "timestamps": [data_processor.floor_ts_to_minute(row["timestamp"]) for row in rows],
         "spot": [row["spot"] for row in rows],
         "pcr": [row["pcr"] for row in rows],
     }

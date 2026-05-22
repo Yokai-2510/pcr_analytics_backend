@@ -482,8 +482,26 @@ MINUTE_FILTER_SQL = """
 """
 
 
+def floor_ts_to_minute(ts: str) -> str:
+    """Truncate seconds on an ISO-8601 timestamp string.
+
+    Used by read endpoints so the UI always sees clean :00 minute boundaries
+    even though raw fetches at 30s land at :30 and drift over time.
+    """
+    if not ts or len(ts) < 19:
+        return ts
+    return ts[:17] + "00" + ts[19:]
+
+
+def _floor_rows(rows: list[dict[str, Any]], key: str = "timestamp") -> list[dict[str, Any]]:
+    for row in rows:
+        if key in row and isinstance(row[key], str):
+            row[key] = floor_ts_to_minute(row[key])
+    return rows
+
+
 def get_pcr_series(instrument: str, date: str) -> list[dict[str, Any]]:
-    return _query(
+    return _floor_rows(_query(
         f"""
         SELECT
             timestamp,
@@ -499,11 +517,11 @@ def get_pcr_series(instrument: str, date: str) -> list[dict[str, Any]]:
         ORDER BY timestamp
         """,
         (instrument, date, instrument, date),
-    )
+    ))
 
 
 def get_total_oi_series(instrument: str, date: str) -> list[dict[str, Any]]:
-    return _query(
+    return _floor_rows(_query(
         f"""
         SELECT
             timestamp,
@@ -517,11 +535,11 @@ def get_total_oi_series(instrument: str, date: str) -> list[dict[str, Any]]:
         ORDER BY timestamp
         """,
         (instrument, date, instrument, date),
-    )
+    ))
 
 
 def get_oi_change_series(instrument: str, date: str, baseline: str) -> list[dict[str, Any]]:
-    return _query(
+    return _floor_rows(_query(
         f"""
         SELECT
             s.timestamp,
@@ -541,7 +559,7 @@ def get_oi_change_series(instrument: str, date: str, baseline: str) -> list[dict
         ORDER BY s.timestamp
         """,
         (date, baseline, instrument, date, instrument, date),
-    )
+    ))
 
 
 def get_snapshots(instrument: str, date: str, strike: float | None = None) -> list[dict[str, Any]]:

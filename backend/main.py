@@ -331,8 +331,10 @@ def run_market_session() -> None:
                     utils.iso_now(), session_date,
                 )
 
-            # Sleep for RAW_FETCH_INTERVAL (testing: 1s)
-            time.sleep(RAW_FETCH_INTERVAL)
+            # Align to the next 30s wall-clock boundary instead of a flat
+            # sleep — a naive time.sleep(30) compounds the fetch's own
+            # latency and drifts the timestamps a second per minute.
+            utils.wait_until_next_fetch()
             continue
 
         # ── Exchange not live (pre-open, auction, etc.) ──────────────────

@@ -551,7 +551,7 @@ def _query_aggregate(config: dict[str, Any]) -> list[dict[str, Any]]:
         config["instrument"],
         config["date"],
     )
-    return data_processor._query(query, params)
+    return data_processor._floor_rows(data_processor._query(query, params))
 
 
 def _query_strikes(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -601,7 +601,7 @@ def _query_strikes(config: dict[str, Any]) -> list[dict[str, Any]]:
         GROUP BY s.timestamp, s.strike
         ORDER BY s.timestamp, s.strike
     """
-    return data_processor._query(query, tuple(params))
+    return data_processor._floor_rows(data_processor._query(query, tuple(params)))
 
 
 def _format_strike(strike: Any) -> str:

@@ -41,10 +41,14 @@ def compute_tick(
     if not raw_rows:
         return None
 
-    # Extract timestamp from raw data
-    timestamp = raw_rows[0].get("timestamp")
-    if not timestamp:
+    # Extract timestamp from raw data and floor to the minute. computed_ticks
+    # is the 1-minute layer so timestamps must sit on clean :00 boundaries —
+    # 09:15:30 → 09:15:00, 09:17:31 → 09:17:00. Raw drift stays in
+    # oi_snapshots; the UI reads from here.
+    raw_timestamp = raw_rows[0].get("timestamp")
+    if not raw_timestamp:
         return None
+    timestamp = _floor_to_minute(raw_timestamp)
 
     # Aggregate raw rows
     total_ce_oi = 0.0
@@ -174,6 +178,17 @@ def compute_tick(
         "signal": signal,
         "crossover": crossover,
     }
+
+
+def _floor_to_minute(ts: str) -> str:
+    """Truncate the seconds on an ISO-8601 timestamp string in-place.
+
+    "2026-05-22T09:15:30+05:30" → "2026-05-22T09:15:00+05:30". Cheap string
+    surgery so we don't pay a datetime round-trip on every tick.
+    """
+    if not ts or len(ts) < 19:
+        return ts
+    return ts[:17] + "00" + ts[19:]
 
 
 def _get_first_tick_oi(instrument: str, date: str) -> dict[str, float] | None:
@@ -348,4 +363,10 @@ def get_computed_ticks(instrument: str, date: str) -> list[dict[str, Any]]:
             """,
             (instrument, date),
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = [dict(r) for r in rows]
+        # Floor defensively in case any stale rows pre-date the data_engine
+        # change that started storing :00-aligned timestamps natively.
+        for row in out:
+            if isinstance(row.get("timestamp"), str):
+                row["timestamp"] = _floor_to_minute(row["timestamp"])
+        return out
