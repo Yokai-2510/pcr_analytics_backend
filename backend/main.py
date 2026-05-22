@@ -3,19 +3,91 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
+import threading
 import time
 from datetime import timedelta
 
 import broker_api
+import data_engine
 import data_processor
 import market_data
 import utilities as utils
 
 logger = logging.getLogger(__name__)
 
+# ── Compute tick interval (seconds) ─────────────────────────────────────
+# FOR TESTING: set to 2 seconds. Production should be 60.
+COMPUTE_TICK_INTERVAL = 60  # seconds between computed ticks (testing: 2s, prod: 60s)
+RAW_FETCH_INTERVAL = 30     # seconds between raw fetches (testing: 1s, prod: 30s)
+
 # Pre-open cache — resolved once before market open, consumed on first tick.
 _preopen_expiries: dict[str, str] | None = None
+
+# ── Compute tick thread ──────────────────────────────────────────────────
+_compute_thread: threading.Thread | None = None
+_compute_stop_event = threading.Event()
+
+
+def _compute_tick_loop() -> None:
+    """Background thread that fires compute at exact interval boundaries.
+
+    Uses math.ceil(now / interval) * interval to align to exact boundaries.
+    For testing (2s): fires at even-second boundaries.
+    For production (60s): fires at exact minute boundaries (09:15:00, 09:16:00, etc.)
+    """
+    logger.info("Compute tick thread started (interval=%ds)", COMPUTE_TICK_INTERVAL)
+    while not _compute_stop_event.is_set():
+        try:
+            # Calculate next boundary
+            now_epoch = time.time()
+            next_boundary = math.ceil(now_epoch / COMPUTE_TICK_INTERVAL) * COMPUTE_TICK_INTERVAL
+            wait_time = next_boundary - time.time()
+
+            if wait_time > 0:
+                # Use event.wait() so we can be interrupted for shutdown
+                if _compute_stop_event.wait(timeout=wait_time):
+                    break  # Stop event was set
+
+            # Fire compute cycle
+            if not _compute_stop_event.is_set():
+                today = utils.today_ist()
+                results = data_engine.run_compute_cycle(today)
+                logger.debug("Compute tick fired at boundary: %s", results)
+
+        except Exception:
+            logger.exception("Error in compute tick loop")
+            # Brief sleep to avoid tight error loop
+            if _compute_stop_event.wait(timeout=1.0):
+                break
+
+    logger.info("Compute tick thread stopped")
+
+
+def start_compute_thread() -> None:
+    """Start the background compute tick thread."""
+    global _compute_thread
+    if _compute_thread and _compute_thread.is_alive():
+        return
+    _compute_stop_event.clear()
+    _compute_thread = threading.Thread(
+        target=_compute_tick_loop,
+        name="compute-tick",
+        daemon=True,
+    )
+    _compute_thread.start()
+    logger.info("Compute tick thread launched")
+
+
+def stop_compute_thread() -> None:
+    """Stop the background compute tick thread."""
+    global _compute_thread
+    _compute_stop_event.set()
+    if _compute_thread and _compute_thread.is_alive():
+        _compute_thread.join(timeout=5.0)
+    _compute_thread = None
+    logger.info("Compute tick thread joined")
 
 
 def run_fetch_tick(expiries: dict[str, str], *, persist: bool = True) -> dict[str, object]:
@@ -151,6 +223,7 @@ def run_market_session() -> None:
         today = utils.today_ist()
 
         if configured_state == "closed_weekend":
+            stop_compute_thread()
             utils.set_status(
                 running=False,
                 collector_running=False,
@@ -161,6 +234,7 @@ def run_market_session() -> None:
             return
 
         if configured_state == "closed":
+            stop_compute_thread()
             if session_date == today and post_settlement_saved and not prev_close_saved:
                 data_processor.save_baseline("prev_close", date=session_date)
                 prev_close_saved = True
@@ -212,13 +286,12 @@ def run_market_session() -> None:
                 # ── Wait until precise market-open time (09:15:00) ────────
                 utils.wait_until_market_open()
 
-            # Fetch every 30s but persist (log) only every 60s.
-            # Always fetch to keep status/current price fresh.
-            now_epoch = time.time()
-            persist_this_tick = (now_epoch - last_persist_epoch) >= 55.0  # ~60s guard
-            run_fetch_tick(expiries or {}, persist=persist_this_tick)
-            if persist_this_tick:
-                last_persist_epoch = now_epoch
+            # ── Start compute thread if not already running ───────────────
+            start_compute_thread()
+
+            # Fetch every RAW_FETCH_INTERVAL seconds (testing: 1s, prod: 30s)
+            # Always persist raw data on every fetch for the new architecture
+            run_fetch_tick(expiries or {}, persist=True)
             utils.set_status(exchange_status=exchange_status)
 
             # ── Save market_open baseline on the very first tick ──────────
@@ -226,7 +299,7 @@ def run_market_session() -> None:
                 data_processor.save_baseline("market_open", date=session_date)
                 market_open_saved = True
                 logger.info(
-                    "✅ market_open baseline recorded at %s for %s",
+                    "market_open baseline recorded at %s for %s",
                     utils.iso_now(), session_date,
                 )
 
@@ -235,13 +308,16 @@ def run_market_session() -> None:
                 data_processor.save_baseline("post_settlement", date=session_date)
                 post_settlement_saved = True
                 logger.info(
-                    "✅ post_settlement baseline recorded at %s for %s",
+                    "post_settlement baseline recorded at %s for %s",
                     utils.iso_now(), session_date,
                 )
 
-            utils.wait_until_next_fetch()
+            # Sleep for RAW_FETCH_INTERVAL (testing: 1s)
+            time.sleep(RAW_FETCH_INTERVAL)
             continue
 
+        # ── Exchange not live (pre-open, auction, etc.) ──────────────────
+        stop_compute_thread()
         utils.set_status(
             running=True,
             collector_running=False,
@@ -257,6 +333,10 @@ def main() -> None:
     utils.configure_logging()
     utils.set_status(running=True, collector_running=False)
     data_processor.initialize_storage()
+    logger.info(
+        "Worker starting with RAW_FETCH_INTERVAL=%ds, COMPUTE_TICK_INTERVAL=%ds",
+        RAW_FETCH_INTERVAL, COMPUTE_TICK_INTERVAL,
+    )
     run_market_session()
 
 
@@ -264,10 +344,12 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
+        stop_compute_thread()
         utils.set_status(running=False, collector_running=False)
         logger.info("Interrupted; exiting")
         sys.exit(130)
     except Exception:
+        stop_compute_thread()
         utils.set_status(running=False, collector_running=False)
         logger.exception("Fatal backend error")
         raise

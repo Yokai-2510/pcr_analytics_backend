@@ -537,6 +537,20 @@ def put_preferences(body: UserPrefsPatch) -> dict[str, Any]:
         raise _as_bad_request(exc) from exc
 
 
+
+
+# ── Pre-computed ticks (new architecture) ───────────────────────────────
+
+@app.get("/api/computed-ticks/{instrument}")
+def computed_ticks(
+    instrument: str,
+    date: str = Query(default_factory=utils.today_ist),
+):
+    import data_engine
+    name = _instrument_or_404(instrument)
+    return data_engine.get_computed_ticks(name, date)
+
+
 if __name__ == "__main__":
     utils.ensure_backend_config()
     uvicorn.run(

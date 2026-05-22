@@ -424,7 +424,7 @@ def _aggregate_latest_for(instrument: str, date: str) -> dict[str, Any] | None:
 def _spark_series(instrument: str, date: str, *, limit: int = 60) -> dict[str, list[Any]]:
     with data_processor.connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT timestamp,
                    AVG(underlying_spot_price) AS spot,
                    CASE WHEN SUM(COALESCE(ce_oi, 0)) > 0
@@ -432,11 +432,12 @@ def _spark_series(instrument: str, date: str, *, limit: int = 60) -> dict[str, l
                         ELSE NULL END AS pcr
             FROM oi_snapshots
             WHERE instrument = ? AND substr(timestamp, 1, 10) = ?
+              AND timestamp IN ({data_processor.MINUTE_FILTER_SQL})
             GROUP BY timestamp
             ORDER BY timestamp DESC
             LIMIT ?
             """,
-            (instrument, date, int(limit)),
+            (instrument, date, instrument, date, int(limit)),
         ).fetchall()
     rows = list(reversed(rows))
     return {

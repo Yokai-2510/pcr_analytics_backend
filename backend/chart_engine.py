@@ -278,6 +278,40 @@ METRICS: dict[str, MetricDef] = {
         ),
         requires_baseline=True,
     ),
+    "ce_oi_cumm": MetricDef(
+        id="ce_oi_cumm",
+        label="CE Cumulative OI Change",
+        group="open_interest",
+        description="Cumulative call OI change from first tick of the day.",
+        unit="contracts",
+        color="#86efac",
+        axis="left",
+        aggregate_sql=(
+            "SUM(COALESCE(s.ce_oi, 0)) - COALESCE("
+            "(SELECT SUM(COALESCE(f.ce_oi, 0)) FROM oi_snapshots f "
+            "WHERE f.instrument = s.instrument AND f.timestamp = "
+            "(SELECT MIN(timestamp) FROM oi_snapshots "
+            "WHERE instrument = s.instrument AND substr(timestamp, 1, 10) = substr(s.timestamp, 1, 10))), 0)"
+        ),
+        strike_sql="AVG(s.ce_oi)",
+    ),
+    "pe_oi_cumm": MetricDef(
+        id="pe_oi_cumm",
+        label="PE Cumulative OI Change",
+        group="open_interest",
+        description="Cumulative put OI change from first tick of the day.",
+        unit="contracts",
+        color="#fca5a5",
+        axis="left",
+        aggregate_sql=(
+            "SUM(COALESCE(s.pe_oi, 0)) - COALESCE("
+            "(SELECT SUM(COALESCE(f.pe_oi, 0)) FROM oi_snapshots f "
+            "WHERE f.instrument = s.instrument AND f.timestamp = "
+            "(SELECT MIN(timestamp) FROM oi_snapshots "
+            "WHERE instrument = s.instrument AND substr(timestamp, 1, 10) = substr(s.timestamp, 1, 10))), 0)"
+        ),
+        strike_sql="AVG(s.pe_oi)",
+    ),
 }
 
 
@@ -505,10 +539,18 @@ def _query_aggregate(config: dict[str, Any]) -> list[dict[str, Any]]:
         FROM oi_snapshots s
         {_baseline_join()}
         WHERE s.instrument = ? AND substr(s.timestamp, 1, 10) = ?
+          AND s.timestamp IN ({data_processor.MINUTE_FILTER_SQL})
         GROUP BY s.timestamp
         ORDER BY s.timestamp
     """
-    params = (config["date"], _resolve_baseline_db(config["baseline"]), config["instrument"], config["date"])
+    params = (
+        config["date"],
+        _resolve_baseline_db(config["baseline"]),
+        config["instrument"],
+        config["date"],
+        config["instrument"],
+        config["date"],
+    )
     return data_processor._query(query, params)
 
 
@@ -517,10 +559,16 @@ def _query_strikes(config: dict[str, Any]) -> list[dict[str, Any]]:
     select_metrics = ",\n            ".join(
         f"{METRICS[metric].strike_sql} AS {metric}" for metric in metrics
     )
-    where = ["s.instrument = ?", "substr(s.timestamp, 1, 10) = ?"]
+    where = [
+        "s.instrument = ?",
+        "substr(s.timestamp, 1, 10) = ?",
+        f"s.timestamp IN ({data_processor.MINUTE_FILTER_SQL})",
+    ]
     params: list[Any] = [
         config["date"],
         _resolve_baseline_db(config["baseline"]),
+        config["instrument"],
+        config["date"],
         config["instrument"],
         config["date"],
     ]

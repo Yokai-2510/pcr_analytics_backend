@@ -1,8 +1,8 @@
 {
   "ec2": {
     "server_name": "index_pcr",
-    "ip_address": "3.111.218.114",
-    "pem_key_file": "index_pcr.pem",
+    "ip_address": "13.127.120.230",
+    "pem_key_file": "nse_pcr_analytics_pemkey.pem",
     "user": "ubuntu",
     "region": "ap-south-1"
   },
@@ -52,6 +52,7 @@
       }
     },
     "market_start_time": "09:10",
-    "market_open_time": "09:15"
+    "market_open_time": "09:15",
+    "settlement_delay_minutes": 5
   }
 }

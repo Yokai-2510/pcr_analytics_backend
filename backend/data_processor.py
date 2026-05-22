@@ -128,6 +128,33 @@ def _ensure_columns(conn: sqlite3.Connection, table: str, columns: list[str]) ->
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {_column_def(column, allow_not_null=False)}")
 
 
+COMPUTED_TICK_COLUMNS = [
+    "timestamp",
+    "instrument",
+    "spot_price",
+    "atm_strike",
+    "total_ce_oi",
+    "total_pe_oi",
+    "pcr",
+    "ce_oi_change",
+    "pe_oi_change",
+    "ce_oi_cumm_change",
+    "pe_oi_cumm_change",
+    "oi_difference",
+    "delta_pcr",
+    "signed_pcr",
+    "volume_pcr",
+    "ce_volume",
+    "pe_volume",
+    "ce_iv_avg",
+    "pe_iv_avg",
+    "signal",
+    "crossover",
+]
+
+COMPUTED_TICK_TEXT_COLUMNS = {"timestamp", "instrument", "signal"}
+
+
 def initialize_storage() -> None:
     with connect() as conn:
         conn.executescript(
@@ -158,11 +185,53 @@ def initialize_storage() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_chart_configs_updated
                 ON chart_configs (updated_at);
+
+            CREATE TABLE IF NOT EXISTS computed_ticks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                instrument TEXT NOT NULL,
+                spot_price REAL,
+                atm_strike REAL,
+                total_ce_oi REAL,
+                total_pe_oi REAL,
+                pcr REAL,
+                ce_oi_change REAL,
+                pe_oi_change REAL,
+                ce_oi_cumm_change REAL,
+                pe_oi_cumm_change REAL,
+                oi_difference REAL,
+                delta_pcr REAL,
+                signed_pcr REAL,
+                volume_pcr REAL,
+                ce_volume REAL,
+                pe_volume REAL,
+                ce_iv_avg REAL,
+                pe_iv_avg REAL,
+                signal TEXT,
+                crossover INTEGER,
+                UNIQUE(timestamp, instrument)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_computed_ticks_lookup
+                ON computed_ticks (instrument, timestamp);
             """
         )
         _ensure_columns(conn, "oi_snapshots", SNAPSHOT_COLUMNS)
         _ensure_columns(conn, "daily_baselines", BASELINE_COLUMNS)
+        # Ensure computed_ticks columns are up-to-date
+        _ensure_computed_tick_columns(conn)
     logger.info("SQLite initialized at %s", utils.db_path())
+
+
+def _ensure_computed_tick_columns(conn: sqlite3.Connection) -> None:
+    """Add any missing columns to computed_ticks table."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(computed_ticks)").fetchall()}
+    for column in COMPUTED_TICK_COLUMNS:
+        if column not in existing:
+            col_type = "TEXT" if column in COMPUTED_TICK_TEXT_COLUMNS else "REAL"
+            if column == "crossover":
+                col_type = "INTEGER"
+            conn.execute(f"ALTER TABLE computed_ticks ADD COLUMN {column} {col_type}")
 
 
 def _csv_path(instrument: str, timestamp: str) -> Any:
@@ -402,9 +471,20 @@ def _query(query: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         return utils.row_dicts(conn.execute(query, params).fetchall())
 
 
+# Raw fetch happens every 30s but the UI is meant to operate on 1-minute bars.
+# This subquery picks the latest raw snapshot within each minute for one
+# instrument + date. Callers add `AND <ts> IN (MINUTE_FILTER_SQL)` and append
+# (instrument, date) to the params.
+MINUTE_FILTER_SQL = """
+    SELECT MAX(timestamp) FROM oi_snapshots
+    WHERE instrument = ? AND substr(timestamp, 1, 10) = ?
+    GROUP BY substr(timestamp, 1, 16)
+"""
+
+
 def get_pcr_series(instrument: str, date: str) -> list[dict[str, Any]]:
     return _query(
-        """
+        f"""
         SELECT
             timestamp,
             CASE WHEN SUM(COALESCE(ce_oi, 0)) > 0
@@ -414,16 +494,17 @@ def get_pcr_series(instrument: str, date: str) -> list[dict[str, Any]]:
             AVG(underlying_spot_price) AS underlying_spot_price
         FROM oi_snapshots
         WHERE instrument = ? AND substr(timestamp, 1, 10) = ?
+          AND timestamp IN ({MINUTE_FILTER_SQL})
         GROUP BY timestamp
         ORDER BY timestamp
         """,
-        (instrument, date),
+        (instrument, date, instrument, date),
     )
 
 
 def get_total_oi_series(instrument: str, date: str) -> list[dict[str, Any]]:
     return _query(
-        """
+        f"""
         SELECT
             timestamp,
             SUM(COALESCE(ce_oi, 0)) AS total_ce_oi,
@@ -431,16 +512,17 @@ def get_total_oi_series(instrument: str, date: str) -> list[dict[str, Any]]:
             AVG(underlying_spot_price) AS underlying_spot_price
         FROM oi_snapshots
         WHERE instrument = ? AND substr(timestamp, 1, 10) = ?
+          AND timestamp IN ({MINUTE_FILTER_SQL})
         GROUP BY timestamp
         ORDER BY timestamp
         """,
-        (instrument, date),
+        (instrument, date, instrument, date),
     )
 
 
 def get_oi_change_series(instrument: str, date: str, baseline: str) -> list[dict[str, Any]]:
     return _query(
-        """
+        f"""
         SELECT
             s.timestamp,
             SUM(COALESCE(s.ce_oi, 0) - COALESCE(b.ce_oi, 0)) AS ce_oi_change,
@@ -454,10 +536,11 @@ def get_oi_change_series(instrument: str, date: str, baseline: str) -> list[dict
             AND b.expiry = s.expiry
             AND b.strike = s.strike
         WHERE s.instrument = ? AND substr(s.timestamp, 1, 10) = ?
+          AND s.timestamp IN ({MINUTE_FILTER_SQL})
         GROUP BY s.timestamp
         ORDER BY s.timestamp
         """,
-        (date, baseline, instrument, date),
+        (date, baseline, instrument, date, instrument, date),
     )
 
 
