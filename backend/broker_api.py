@@ -118,6 +118,15 @@ def get_exchange_status(exchange: str = "NSE") -> dict[str, Any]:
     return data
 
 
+def get_user_profile() -> dict[str, Any]:
+    """Call Upstox /v2/user/profile using the configured access token."""
+    parsed = _get("user/profile", retry_on_401=True)
+    data = parsed.get("data") or {}
+    if not isinstance(data, dict):
+        raise BrokerAPIError("user profile response data is not an object")
+    return data
+
+
 def is_exchange_open(exchange_status: dict[str, Any]) -> bool:
     status = str(exchange_status.get("status") or "").upper()
     return status.endswith("_OPEN") or status == "OPEN"

@@ -376,6 +376,22 @@ def get_credentials() -> dict[str, Any]:
     return utils.public_credentials()
 
 
+@app.get("/api/credentials/reveal", dependencies=[Depends(require_admin)])
+def reveal_credentials() -> dict[str, Any]:
+    return utils.full_credentials()
+
+
+@app.post("/api/upstox/test", dependencies=[Depends(require_admin)])
+def test_upstox() -> dict[str, Any]:
+    try:
+        profile = broker_api.get_user_profile()
+    except broker_api.BrokerAPIError as exc:
+        return {"connected": False, "error": str(exc), "status_code": exc.status_code}
+    except Exception as exc:  # noqa: BLE001
+        return {"connected": False, "error": str(exc)}
+    return {"connected": True, "profile": profile}
+
+
 @app.patch("/api/credentials/upstox", dependencies=[Depends(require_admin)])
 def patch_upstox_credentials(body: UpstoxCredentialsPatch) -> dict[str, Any]:
     try:

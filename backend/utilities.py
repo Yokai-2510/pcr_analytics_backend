@@ -365,6 +365,16 @@ def public_credentials() -> dict[str, Any]:
     }
 
 
+def full_credentials() -> dict[str, Any]:
+    """Return plaintext credentials. Caller must enforce admin auth."""
+    creds = ensure_credentials()
+    return {
+        section: {key: ("" if value is None else str(value)) for key, value in values.items()}
+        for section, values in creds.items()
+        if isinstance(values, dict)
+    }
+
+
 def update_credentials_section(section: str, updates: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "upstox": {
