@@ -134,24 +134,34 @@ def compute_tick(
         if abs(ce_oi_change) > 0:
             signed_pcr = pe_oi_change / abs(ce_oi_change)
 
-    # Signal logic: BUY when oi_difference crosses from negative to positive,
-    # SELL when crosses from positive to negative. The first tick of the day
-    # has no prior tick — initialise it with BUY so the day always opens with
-    # an active position instead of waiting for a crossover that might never
-    # come.
+    # Signal logic, in order:
+    #   - First tick of session (no prev_tick): no signal — we have no
+    #     comparison point yet.
+    #   - Within ~1 minute of market_close_time: don't open new positions;
+    #     if a BUY is currently open, force a SELL so the day never ends long.
+    #   - Second tick of session (no signal recorded yet today): forced BUY.
+    #     This is the "first entry" the strategy always takes.
+    #   - Subsequent ticks: alternate strictly with position state — only fire
+    #     SELL if currently BUY, only fire BUY if currently SELL — so the
+    #     sequence is BUY → SELL → BUY → SELL.
     signal = None
     crossover = 0
-    if oi_difference is not None:
-        if prev_tick is None:
+    position = _current_session_position(instrument, date)
+    if prev_tick is not None and oi_difference is not None:
+        if _is_last_session_tick(timestamp):
+            if position == "BUY":
+                signal = "SELL"
+                crossover = 1
+        elif position is None:
             signal = "BUY"
             crossover = 1
         else:
             prev_oi_diff = utils.safe_float(prev_tick.get("oi_difference"))
             if prev_oi_diff is not None:
-                if prev_oi_diff <= 0 and oi_difference > 0:
+                if position == "SELL" and prev_oi_diff <= 0 and oi_difference > 0:
                     signal = "BUY"
                     crossover = 1
-                elif prev_oi_diff >= 0 and oi_difference < 0:
+                elif position == "BUY" and prev_oi_diff >= 0 and oi_difference < 0:
                     signal = "SELL"
                     crossover = 1
 
@@ -178,6 +188,36 @@ def compute_tick(
         "signal": signal,
         "crossover": crossover,
     }
+
+
+def _current_session_position(instrument: str, date: str) -> str | None:
+    """Return the most recent non-null signal for (instrument, date) — i.e. the
+    position currently held. None if no signal has fired today yet."""
+    with data_processor.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT signal FROM computed_ticks
+            WHERE instrument = ? AND substr(timestamp, 1, 10) = ? AND signal IS NOT NULL
+            ORDER BY timestamp DESC LIMIT 1
+            """,
+            (instrument, date),
+        ).fetchone()
+    return row["signal"] if row else None
+
+
+def _is_last_session_tick(timestamp_str: str) -> bool:
+    """True if ``timestamp_str`` falls in the final minute of the trading
+    session as configured by ``market_close_time``."""
+    cfg = utils.app_config()
+    close_str = str(cfg.get("market_close_time") or "15:30")
+    try:
+        close_h, close_m = (int(p) for p in close_str.split(":"))
+        tick_h = int(timestamp_str[11:13])
+        tick_m = int(timestamp_str[14:16])
+    except (ValueError, IndexError):
+        return False
+    minutes_to_close = (close_h - tick_h) * 60 + (close_m - tick_m)
+    return 0 <= minutes_to_close <= 1
 
 
 def _floor_to_minute(ts: str) -> str:
@@ -350,6 +390,79 @@ def run_compute_cycle(date: str | None = None) -> dict[str, Any]:
 
     logger.info("Compute cycle complete: %s", results)
     return results
+
+
+def recompute_signals_for_date(instrument: str, date: str) -> dict[str, int]:
+    """Replay the signal rules across every computed_tick of (instrument, date).
+
+    Walks the day's ticks in order, resets all signal/crossover columns, and
+    re-derives them using the current ``compute_tick`` rules — first tick no
+    signal, second tick BUY, alternating crossovers thereafter, force-SELL at
+    the last tick if still long.
+    """
+    cfg = utils.app_config()
+    close_str = str(cfg.get("market_close_time") or "15:30")
+    close_h, close_m = (int(p) for p in close_str.split(":"))
+
+    with data_processor.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, timestamp, oi_difference FROM computed_ticks
+            WHERE instrument = ? AND substr(timestamp, 1, 10) = ?
+            ORDER BY timestamp
+            """,
+            (instrument, date),
+        ).fetchall()
+
+        position: str | None = None
+        prev_oi_diff: float | None = None
+        signals_assigned = 0
+        updates: list[tuple[Any, int, int]] = []
+
+        for index, row in enumerate(rows):
+            ts = row["timestamp"]
+            oi_diff = utils.safe_float(row["oi_difference"])
+
+            tick_h = int(ts[11:13])
+            tick_m = int(ts[14:16])
+            minutes_to_close = (close_h - tick_h) * 60 + (close_m - tick_m)
+            is_last_tick = 0 <= minutes_to_close <= 1
+
+            signal: str | None = None
+            crossover = 0
+            if index == 0 or oi_diff is None:
+                pass
+            elif is_last_tick:
+                if position == "BUY":
+                    signal = "SELL"
+                    crossover = 1
+            elif position is None:
+                signal = "BUY"
+                crossover = 1
+            elif prev_oi_diff is not None:
+                if position == "SELL" and prev_oi_diff <= 0 and oi_diff > 0:
+                    signal = "BUY"
+                    crossover = 1
+                elif position == "BUY" and prev_oi_diff >= 0 and oi_diff < 0:
+                    signal = "SELL"
+                    crossover = 1
+
+            updates.append((signal, crossover, row["id"]))
+            if signal is not None:
+                position = signal
+                signals_assigned += 1
+            prev_oi_diff = oi_diff
+
+        conn.executemany(
+            "UPDATE computed_ticks SET signal = ?, crossover = ? WHERE id = ?",
+            updates,
+        )
+
+    logger.info(
+        "Recomputed signals for %s/%s: %d rows updated, %d signals assigned",
+        instrument, date, len(updates), signals_assigned,
+    )
+    return {"rows": len(updates), "signals": signals_assigned}
 
 
 def get_computed_ticks(instrument: str, date: str) -> list[dict[str, Any]]:
