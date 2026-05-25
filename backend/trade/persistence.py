@@ -11,6 +11,7 @@ idempotently and is safe to run on every worker start.
 from __future__ import annotations
 
 import json
+from contextlib import closing
 import logging
 import sqlite3
 import uuid
@@ -154,7 +155,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 def get_active_config() -> dict[str, Any]:
     """Return the currently active config merged onto defaults. Always returns
     a usable dict even if no config has been saved yet."""
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         row = conn.execute(
             "SELECT json_blob FROM trade_configs WHERE active = 1 LIMIT 1"
         ).fetchone()
@@ -178,7 +179,7 @@ def save_config(new_blob: dict[str, Any]) -> dict[str, Any]:
     merged.update(new_blob or {})
     payload = json.dumps(merged, sort_keys=True)
     now = utils.iso_now()
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         conn.execute("UPDATE trade_configs SET active = 0 WHERE active = 1")
         conn.execute(
             "INSERT INTO trade_configs (created_at, json_blob, active) VALUES (?, ?, 1)",
@@ -215,7 +216,7 @@ def insert_order(conn: sqlite3.Connection, fields: dict[str, Any]) -> int:
 
 
 def orders_for_date(date: str) -> list[dict[str, Any]]:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         rows = conn.execute(
             """
             SELECT * FROM orders
@@ -228,7 +229,7 @@ def orders_for_date(date: str) -> list[dict[str, Any]]:
 
 
 def last_entry_time_for_instrument(instrument: str, date: str) -> str | None:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         row = conn.execute(
             """
             SELECT MAX(placed_at) AS ts FROM orders
@@ -241,7 +242,7 @@ def last_entry_time_for_instrument(instrument: str, date: str) -> str | None:
 
 
 def count_entries_today(date: str) -> int:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         row = conn.execute(
             """
             SELECT COUNT(*) AS n FROM orders
@@ -274,7 +275,7 @@ def insert_position(conn: sqlite3.Connection, fields: dict[str, Any]) -> int:
 
 
 def open_positions() -> list[dict[str, Any]]:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         rows = conn.execute(
             "SELECT * FROM positions WHERE status = 'open' ORDER BY entry_time"
         ).fetchall()
@@ -282,7 +283,7 @@ def open_positions() -> list[dict[str, Any]]:
 
 
 def has_open_for_instrument(instrument: str) -> bool:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         row = conn.execute(
             """
             SELECT 1 FROM positions
@@ -300,7 +301,7 @@ def positions_for_date(date: str, status: str | None = None) -> list[dict[str, A
     if status:
         where.append("status = ?")
         params.append(status)
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         rows = conn.execute(
             f"""
             SELECT * FROM positions
@@ -313,7 +314,7 @@ def positions_for_date(date: str, status: str | None = None) -> list[dict[str, A
 
 
 def update_position_tsl(position_id: int, high_watermark: float, sl_price: float) -> None:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         conn.execute(
             """
             UPDATE positions
@@ -328,7 +329,7 @@ def update_position_tsl(position_id: int, high_watermark: float, sl_price: float
 def request_manual_exit(position_id: int) -> bool:
     """Flag a position for manual exit on the engine's next tick.
     Returns True if a still-open position was flagged."""
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         cur = conn.execute(
             """
             UPDATE positions
@@ -356,7 +357,7 @@ def open_position_atomic(
     duplicate — the engine logs and moves on.
     """
     client_ref = order_fields.setdefault("client_order_ref", uuid.uuid4().hex)
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         try:
             conn.execute("BEGIN")
             order_id = insert_order(conn, order_fields)
@@ -400,7 +401,7 @@ def close_position_atomic(
     exit_order_fields.setdefault("client_order_ref", uuid.uuid4().hex)
     pnl = (exit_price - entry_price) * qty
     now = utils.iso_now()
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         try:
             conn.execute("BEGIN")
             cur = conn.execute(
@@ -460,7 +461,7 @@ def audit(
     """Append an audit row. Never raises — audit failures must not break
     the engine."""
     try:
-        with data_processor.connect() as conn:
+        with closing(data_processor.connect()) as conn:
             conn.execute(
                 """
                 INSERT INTO order_audit
@@ -475,7 +476,7 @@ def audit(
 
 
 def recent_audit(limit: int = 200) -> list[dict[str, Any]]:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         rows = conn.execute(
             "SELECT * FROM order_audit ORDER BY ts DESC LIMIT ?",
             (int(limit),),
@@ -488,7 +489,7 @@ def recent_audit(limit: int = 200) -> list[dict[str, Any]]:
 
 def save_daily_report(date: str, report: dict[str, Any]) -> None:
     payload = json.dumps(report, default=str, sort_keys=True)
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         conn.execute(
             """
             INSERT INTO daily_trade_reports (date, generated_at, json_blob)
@@ -503,7 +504,7 @@ def save_daily_report(date: str, report: dict[str, Any]) -> None:
 
 
 def get_daily_report(date: str) -> dict[str, Any] | None:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         row = conn.execute(
             "SELECT date, generated_at, json_blob FROM daily_trade_reports WHERE date = ?",
             (date,),
@@ -521,7 +522,7 @@ def get_daily_report(date: str) -> dict[str, Any] | None:
 
 def list_report_dates() -> list[str]:
     """Every date for which we have either a snapshotted report OR positions."""
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         a = conn.execute("SELECT date FROM daily_trade_reports").fetchall()
         b = conn.execute(
             "SELECT DISTINCT substr(entry_time, 1, 10) AS d FROM positions"

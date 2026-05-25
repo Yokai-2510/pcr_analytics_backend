@@ -14,6 +14,7 @@ tick can never kill the thread.
 
 from __future__ import annotations
 
+from contextlib import closing
 import logging
 from datetime import datetime, time as dt_time
 from typing import Any
@@ -145,7 +146,7 @@ def _latest_signal_after(
     date: str,
     after_iso: str,
 ) -> dict[str, Any] | None:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         row = conn.execute(
             """
             SELECT timestamp, signal, crossover
@@ -433,7 +434,7 @@ def _evaluate_one_entry(
 
 
 def _latest_buy_crossover(instrument: str, date: str) -> dict[str, Any] | None:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         row = conn.execute(
             """
             SELECT timestamp, signal, crossover, oi_difference, pcr,
@@ -456,7 +457,7 @@ def _previous_computed_tick(
     date: str,
     timestamp: str,
 ) -> dict[str, Any] | None:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         row = conn.execute(
             """
             SELECT timestamp, ce_oi_cumm_change, pe_oi_cumm_change
@@ -483,7 +484,7 @@ def _decide_side(prev_ce_cumm: float | None, prev_pe_cumm: float | None) -> str 
 
 
 def _entry_already_exists(instrument: str, signal_timestamp: str) -> bool:
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         row = conn.execute(
             """
             SELECT 1 FROM orders

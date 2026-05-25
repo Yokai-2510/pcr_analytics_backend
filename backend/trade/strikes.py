@@ -8,6 +8,7 @@ strike isn't present (slow-moving spots can land on a gap in the chain).
 
 from __future__ import annotations
 
+from contextlib import closing
 import logging
 from typing import Any, Literal
 
@@ -26,7 +27,7 @@ class StrikeInfo(dict):
 def _latest_chain(instrument: str, date: str) -> list[dict[str, Any]]:
     """All strikes from the most recent oi_snapshots timestamp for this
     instrument + date. Each row has both CE and PE leg columns."""
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         ts_row = conn.execute(
             """
             SELECT MAX(timestamp) AS ts FROM oi_snapshots
@@ -146,7 +147,7 @@ def latest_ltp(
     oi_snapshots row that contains it. Used by the exit engine to evaluate
     open positions."""
     column = "ce_ltp" if side == "CE" else "pe_ltp"
-    with data_processor.connect() as conn:
+    with closing(data_processor.connect()) as conn:
         row = conn.execute(
             f"""
             SELECT {column} AS ltp, timestamp
