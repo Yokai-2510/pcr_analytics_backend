@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 COMPUTE_TICK_INTERVAL = 60  # seconds between computed ticks (testing: 2s, prod: 60s)
 RAW_FETCH_INTERVAL = 30     # seconds between raw fetches (testing: 1s, prod: 30s)
 
+# Fire compute at OFFSET seconds into each minute (rather than at :00) so the
+# :00 raw fetch has time to commit. Without this, the compute at 09:16:00
+# would see only the 09:15:30 raw, floor it to 09:15:00, and the 09:16:00
+# computed_tick row wouldn't be written until 09:17:00 -- pushing the trade
+# engine's first entry from 09:16:xx to 09:17:xx.
+COMPUTE_TICK_OFFSET_SECONDS = 15
+
 # Pre-open cache — resolved once before market open, consumed on first tick.
 _preopen_expiries: dict[str, str] | None = None
 
@@ -34,16 +41,23 @@ _compute_stop_event = threading.Event()
 def _compute_tick_loop() -> None:
     """Background thread that fires compute at exact interval boundaries.
 
-    Uses math.ceil(now / interval) * interval to align to exact boundaries.
-    For testing (2s): fires at even-second boundaries.
-    For production (60s): fires at exact minute boundaries (09:15:00, 09:16:00, etc.)
+    Fires at COMPUTE_TICK_OFFSET_SECONDS into each minute (rather than at
+    :00) so the raw fetch at the minute boundary has time to commit before
+    we read it. This ensures the computed_tick for minute T is written
+    inside minute T, not minute T+1.
     """
-    logger.info("Compute tick thread started (interval=%ds)", COMPUTE_TICK_INTERVAL)
+    logger.info(
+        "Compute tick thread started (interval=%ds, offset=:%02ds into minute)",
+        COMPUTE_TICK_INTERVAL, COMPUTE_TICK_OFFSET_SECONDS,
+    )
     while not _compute_stop_event.is_set():
         try:
-            # Calculate next boundary
             now_epoch = time.time()
-            next_boundary = math.ceil(now_epoch / COMPUTE_TICK_INTERVAL) * COMPUTE_TICK_INTERVAL
+            # Align to (next minute start) + offset.
+            floor_minute = math.floor(now_epoch / COMPUTE_TICK_INTERVAL) * COMPUTE_TICK_INTERVAL
+            next_boundary = floor_minute + COMPUTE_TICK_OFFSET_SECONDS
+            if next_boundary <= now_epoch:
+                next_boundary += COMPUTE_TICK_INTERVAL
             wait_time = next_boundary - time.time()
 
             if wait_time > 0:

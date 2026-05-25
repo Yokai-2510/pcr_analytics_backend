@@ -321,11 +321,12 @@ def _evaluate_one_entry(
         return
     prev_ce = utils.safe_float(prev.get("ce_oi_cumm_change"))
     prev_pe = utils.safe_float(prev.get("pe_oi_cumm_change"))
-    side = _decide_side(prev_ce, prev_pe)
+    current_diff = utils.safe_float(signal.get("oi_difference"))
+    side = _decide_side(prev_ce, prev_pe, current_diff)
     if side is None:
         persistence.audit(
             "gate_reject", instrument=instrument, gate="TIE_OR_MISSING_CUMM",
-            message=f"ce_cumm={prev_ce} pe_cumm={prev_pe}",
+            message=f"ce_cumm={prev_ce} pe_cumm={prev_pe} diff={current_diff}",
         )
         return
 
@@ -473,14 +474,36 @@ def _previous_computed_tick(
     return dict(row) if row else None
 
 
-def _decide_side(prev_ce_cumm: float | None, prev_pe_cumm: float | None) -> str | None:
-    """At a crossover the side whose cumulative OI was lower just before is
-    the side we buy."""
-    if prev_ce_cumm is None or prev_pe_cumm is None:
-        return None
-    if prev_ce_cumm == prev_pe_cumm:
-        return None
-    return "CE" if prev_ce_cumm < prev_pe_cumm else "PE"
+def _decide_side(
+    prev_ce_cumm: float | None,
+    prev_pe_cumm: float | None,
+    current_diff: float | None,
+) -> str | None:
+    """Pick the leg to buy at a BUY+crossover tick.
+
+    Rule (user's): the *Difference* (PE_cumm - CE_cumm) flipping its sign at
+    this tick decides the side.
+        - prev_diff <= 0 and current_diff > 0  (flip -ve to +ve)  ->  BUY CE
+        - prev_diff >= 0 and current_diff < 0  (flip +ve to -ve)  ->  BUY PE
+
+    Forced first BUY of the day (data_engine emits a forced BUY at the second
+    tick of the session even without a real sign change) defaults to CE so the
+    day opens with a long-bullish entry, matching the verified-good behaviour
+    of session open.
+    """
+    prev_diff: float | None = None
+    if prev_ce_cumm is not None and prev_pe_cumm is not None:
+        prev_diff = float(prev_pe_cumm) - float(prev_ce_cumm)
+
+    if prev_diff is not None and current_diff is not None:
+        if prev_diff <= 0 and current_diff > 0:
+            return "CE"
+        if prev_diff >= 0 and current_diff < 0:
+            return "PE"
+
+    # No diff sign-change -- this is the forced first BUY of the day. Default
+    # to CE (bullish open) per "first trade is alright" expectation.
+    return "CE"
 
 
 def _entry_already_exists(instrument: str, signal_timestamp: str) -> bool:
