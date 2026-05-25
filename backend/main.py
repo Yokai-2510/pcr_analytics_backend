@@ -13,6 +13,7 @@ import broker_api
 import data_engine
 import data_processor
 import market_data
+import trade
 import utilities as utils
 
 logger = logging.getLogger(__name__)
@@ -358,7 +359,11 @@ def main() -> None:
         "Worker starting with RAW_FETCH_INTERVAL=%ds, COMPUTE_TICK_INTERVAL=%ds",
         RAW_FETCH_INTERVAL, COMPUTE_TICK_INTERVAL,
     )
-    run_market_session()
+    trade.start_execution_thread()
+    try:
+        run_market_session()
+    finally:
+        trade.stop_execution_thread()
 
 
 if __name__ == "__main__":
@@ -366,11 +371,13 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         stop_compute_thread()
+        trade.stop_execution_thread()
         utils.set_status(running=False, collector_running=False)
         logger.info("Interrupted; exiting")
         sys.exit(130)
     except Exception:
         stop_compute_thread()
+        trade.stop_execution_thread()
         utils.set_status(running=False, collector_running=False)
         logger.exception("Fatal backend error")
         raise

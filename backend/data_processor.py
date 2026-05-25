@@ -220,6 +220,12 @@ def initialize_storage() -> None:
         _ensure_columns(conn, "daily_baselines", BASELINE_COLUMNS)
         # Ensure computed_ticks columns are up-to-date
         _ensure_computed_tick_columns(conn)
+        # Trade subsystem tables (orders, positions, configs, audit, reports)
+        try:
+            import trade
+            trade.init_schema(conn)
+        except Exception:
+            logger.exception("trade.init_schema failed; continuing without trade tables")
     logger.info("SQLite initialized at %s", utils.db_path())
 
 

@@ -612,6 +612,12 @@ def computed_ticks(
     return data_engine.get_computed_ticks(name, date)
 
 
+# Mount the trade subsystem router. Imported at module bottom so
+# trade.api can reference require_admin (defined above) at import time.
+from trade.api import router as trade_router  # noqa: E402
+app.include_router(trade_router)
+
+
 if __name__ == "__main__":
     utils.ensure_backend_config()
     uvicorn.run(
