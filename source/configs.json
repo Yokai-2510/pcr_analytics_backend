@@ -21,7 +21,7 @@
       "weekdays": "Mon..Fri",
       "worker_start_time": "09:10",
       "worker_stop_time": "15:30",
-      "daily_restart_time": "08:55"
+      "daily_restart_time": "08:45"
     },
     "paths": {
       "db": "data/oi_data.db",

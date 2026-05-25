@@ -1,0 +1,12 @@
+[Unit]
+Description=Trigger index-pcr-daily-prep at 08:45 IST on weekdays
+
+[Timer]
+# 08:45 IST = 03:15 UTC. Mon..Fri only.
+OnCalendar=Mon..Fri *-*-* 03:15:00 UTC
+Persistent=true
+AccuracySec=10s
+Unit=index-pcr-daily-prep.service
+
+[Install]
+WantedBy=timers.target
