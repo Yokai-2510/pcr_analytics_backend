@@ -50,15 +50,24 @@ def _compute_tick_loop() -> None:
         "Compute tick thread started (interval=%ds, offset=:%02ds into minute)",
         COMPUTE_TICK_INTERVAL, COMPUTE_TICK_OFFSET_SECONDS,
     )
+    first_iteration = True
     while not _compute_stop_event.is_set():
         try:
-            now_epoch = time.time()
-            # Align to (next minute start) + offset.
-            floor_minute = math.floor(now_epoch / COMPUTE_TICK_INTERVAL) * COMPUTE_TICK_INTERVAL
-            next_boundary = floor_minute + COMPUTE_TICK_OFFSET_SECONDS
-            if next_boundary <= now_epoch:
-                next_boundary += COMPUTE_TICK_INTERVAL
-            wait_time = next_boundary - time.time()
+            if first_iteration:
+                # Fire immediately on thread start so the current minute's
+                # tick is captured -- otherwise if state goes live at, say,
+                # 09:15:20 we'd skip the 09:15:15 fire and the forced-BUY
+                # would slip from 09:16 to 09:17.
+                first_iteration = False
+                wait_time = 0.0
+            else:
+                now_epoch = time.time()
+                # Align to (current minute start) + offset.
+                floor_minute = math.floor(now_epoch / COMPUTE_TICK_INTERVAL) * COMPUTE_TICK_INTERVAL
+                next_boundary = floor_minute + COMPUTE_TICK_OFFSET_SECONDS
+                if next_boundary <= now_epoch:
+                    next_boundary += COMPUTE_TICK_INTERVAL
+                wait_time = next_boundary - time.time()
 
             if wait_time > 0:
                 # Use event.wait() so we can be interrupted for shutdown

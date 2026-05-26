@@ -106,15 +106,16 @@ def _evaluate_one_exit(
             _close(position, "exit_time", ltp, b)
             return
 
-    # Priority 3: counter-crossover (opposite-direction signal from data_engine)
+    # Priority 3: counter-crossover. The opposite-direction signal closes the
+    # leg: SELL closes CE (because we entered CE on a BUY crossover), BUY
+    # closes PE (because we entered PE on a SELL crossover). Pass 2 (entries)
+    # will then re-open on the new side in the same tick.
     if config.get("exit_on_counter_crossover", True):
-        opp = "SELL" if position_is_long_side(side) else "BUY"  # we always long; opp = SELL
-        # Both BUY and SELL signals can exit a long; counter-crossover means SELL.
-        # The data_engine emits BUY on entry crossover, SELL on exit crossover.
+        counter = "SELL" if side == "CE" else "BUY"
         latest = _latest_signal_after(
             instrument, today, after_iso=position["entry_time"],
         )
-        if latest and latest.get("signal") == "SELL":
+        if latest and latest.get("signal") == counter:
             _close(position, "exit_crossover", ltp, b)
             return
 
@@ -297,8 +298,13 @@ def _evaluate_one_entry(
         if last_ts and _iso_seconds_ago(last_ts, now) < cooldown_min * 60:
             return  # silent
 
-    # Pull the latest BUY+crossover for this instrument today
-    signal = _latest_buy_crossover(instrument, today)
+    # Pull the latest crossover (either BUY or SELL) for this instrument.
+    # Every crossover is an entry trigger:
+    #   - BUY crossover  (diff went -ve -> +ve)  -> enter CE
+    #   - SELL crossover (diff went +ve -> -ve)  -> enter PE
+    # Pass 1 (exits) has already closed any existing position on the counter
+    # side in this same tick, so the instrument is free to open the new leg.
+    signal = _latest_crossover(instrument, today)
     if not signal:
         return  # no fresh signal — silent
 
@@ -311,22 +317,11 @@ def _evaluate_one_entry(
     if _entry_already_exists(instrument, signal["timestamp"]):
         return  # silent
 
-    # Decide side from the *previous* tick's cumulative OI
-    prev = _previous_computed_tick(instrument, today, signal["timestamp"])
-    if not prev:
-        persistence.audit(
-            "gate_reject", instrument=instrument, gate="NO_PREV_TICK",
-            message=f"no tick before {signal['timestamp']}",
-        )
-        return
-    prev_ce = utils.safe_float(prev.get("ce_oi_cumm_change"))
-    prev_pe = utils.safe_float(prev.get("pe_oi_cumm_change"))
-    current_diff = utils.safe_float(signal.get("oi_difference"))
-    side = _decide_side(prev_ce, prev_pe, current_diff)
+    side = _decide_side(signal.get("signal"))
     if side is None:
         persistence.audit(
-            "gate_reject", instrument=instrument, gate="TIE_OR_MISSING_CUMM",
-            message=f"ce_cumm={prev_ce} pe_cumm={prev_pe} diff={current_diff}",
+            "gate_reject", instrument=instrument, gate="UNKNOWN_SIGNAL",
+            message=f"unrecognised signal={signal.get('signal')}",
         )
         return
 
@@ -419,9 +414,12 @@ def _evaluate_one_entry(
             signal_timestamp=signal["timestamp"],
             ctx_oi_difference=utils.safe_float(signal.get("oi_difference")),
             ctx_pcr=utils.safe_float(signal.get("pcr")),
-            ctx_ce_cumm=prev_ce,
-            ctx_pe_cumm=prev_pe,
-            ctx_margin=abs((prev_pe or 0) - (prev_ce or 0)),
+            ctx_ce_cumm=utils.safe_float(signal.get("ce_oi_cumm_change")),
+            ctx_pe_cumm=utils.safe_float(signal.get("pe_oi_cumm_change")),
+            ctx_margin=abs(
+                (utils.safe_float(signal.get("pe_oi_cumm_change")) or 0)
+                - (utils.safe_float(signal.get("ce_oi_cumm_change")) or 0)
+            ),
         ),
     )
     if opened is None:
@@ -434,7 +432,9 @@ def _evaluate_one_entry(
     )
 
 
-def _latest_buy_crossover(instrument: str, date: str) -> dict[str, Any] | None:
+def _latest_crossover(instrument: str, date: str) -> dict[str, Any] | None:
+    """Latest crossover tick (BUY or SELL) for today. Every crossover is an
+    entry trigger — the data_engine signal direction tells us which side."""
     with closing(data_processor.connect()) as conn:
         row = conn.execute(
             """
@@ -443,7 +443,7 @@ def _latest_buy_crossover(instrument: str, date: str) -> dict[str, Any] | None:
             FROM computed_ticks
             WHERE instrument = ?
               AND substr(timestamp, 1, 10) = ?
-              AND signal = 'BUY'
+              AND signal IN ('BUY', 'SELL')
               AND crossover = 1
             ORDER BY timestamp DESC
             LIMIT 1
@@ -453,57 +453,20 @@ def _latest_buy_crossover(instrument: str, date: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def _previous_computed_tick(
-    instrument: str,
-    date: str,
-    timestamp: str,
-) -> dict[str, Any] | None:
-    with closing(data_processor.connect()) as conn:
-        row = conn.execute(
-            """
-            SELECT timestamp, ce_oi_cumm_change, pe_oi_cumm_change
-            FROM computed_ticks
-            WHERE instrument = ?
-              AND substr(timestamp, 1, 10) = ?
-              AND timestamp < ?
-            ORDER BY timestamp DESC
-            LIMIT 1
-            """,
-            (instrument, date, timestamp),
-        ).fetchone()
-    return dict(row) if row else None
+def _decide_side(signal: str | None) -> str | None:
+    """Map data_engine signal direction to the option leg to buy.
 
-
-def _decide_side(
-    prev_ce_cumm: float | None,
-    prev_pe_cumm: float | None,
-    current_diff: float | None,
-) -> str | None:
-    """Pick the leg to buy at a BUY+crossover tick.
-
-    Rule (user's): the *Difference* (PE_cumm - CE_cumm) flipping its sign at
-    this tick decides the side.
-        - prev_diff <= 0 and current_diff > 0  (flip -ve to +ve)  ->  BUY CE
-        - prev_diff >= 0 and current_diff < 0  (flip +ve to -ve)  ->  BUY PE
-
-    Forced first BUY of the day (data_engine emits a forced BUY at the second
-    tick of the session even without a real sign change) defaults to CE so the
-    day opens with a long-bullish entry, matching the verified-good behaviour
-    of session open.
+    The data_engine emits BUY when the diff (PE_cumm - CE_cumm) flips
+    -ve -> +ve, and SELL when it flips +ve -> -ve. Both are entry triggers
+    in the trade engine:
+        BUY  -> enter CE
+        SELL -> enter PE
     """
-    prev_diff: float | None = None
-    if prev_ce_cumm is not None and prev_pe_cumm is not None:
-        prev_diff = float(prev_pe_cumm) - float(prev_ce_cumm)
-
-    if prev_diff is not None and current_diff is not None:
-        if prev_diff <= 0 and current_diff > 0:
-            return "CE"
-        if prev_diff >= 0 and current_diff < 0:
-            return "PE"
-
-    # No diff sign-change -- this is the forced first BUY of the day. Default
-    # to CE (bullish open) per "first trade is alright" expectation.
-    return "CE"
+    if signal == "BUY":
+        return "CE"
+    if signal == "SELL":
+        return "PE"
+    return None
 
 
 def _entry_already_exists(instrument: str, signal_timestamp: str) -> bool:
