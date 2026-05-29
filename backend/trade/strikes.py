@@ -82,11 +82,20 @@ def resolve(
     instrument: str,
     side: OptionType,
     strike_mode: str,
-    custom_strike: float | None,
+    custom_steps: int | None,
     date: str,
 ) -> StrikeInfo | None:
     """Return token + reference LTP for the leg to trade, or None if we
-    don't have data for this instrument yet today."""
+    don't have data for this instrument yet today.
+
+    strike_mode values:
+        atm           — at-the-money
+        itm_1         — 1 step in-the-money (CE: ATM-step, PE: ATM+step)
+        itm_2         — 2 steps in-the-money
+        custom_steps  — N steps from ATM in the ITM direction; negative
+                        values mean OTM. Step direction is side-aware:
+                        positive moves toward ITM on either leg.
+    """
     chain = _latest_chain(instrument, date)
     if not chain:
         return None
@@ -97,17 +106,26 @@ def resolve(
     atm_strike = float(atm_row["strike"])
     step = _step_for(instrument)
 
+    def itm_offset(n_steps: int) -> float:
+        # +n moves into ITM for both legs; -n moves into OTM.
+        # CE: lower strike = ITM, higher = OTM
+        # PE: higher strike = ITM, lower = OTM
+        return -n_steps * step if side == "CE" else n_steps * step
+
     if strike_mode == "atm" or step <= 0:
         target = atm_strike
-    elif strike_mode == "atm_plus_1":
-        # OTM: higher strike for CE (further from spot), lower for PE
-        target = atm_strike + step if side == "CE" else atm_strike - step
-    elif strike_mode == "atm_minus_1":
-        # ITM: lower strike for CE, higher for PE
-        target = atm_strike - step if side == "CE" else atm_strike + step
-    elif strike_mode == "custom" and custom_strike is not None:
-        target = float(custom_strike)
+    elif strike_mode == "itm_1":
+        target = atm_strike + itm_offset(1)
+    elif strike_mode == "itm_2":
+        target = atm_strike + itm_offset(2)
+    elif strike_mode == "custom_steps" and custom_steps is not None:
+        try:
+            n = int(custom_steps)
+        except (TypeError, ValueError):
+            n = 0
+        target = atm_strike + itm_offset(n)
     else:
+        # Unknown / legacy mode -> fall back to ATM rather than refusing
         target = atm_strike
 
     row = _nearest_row(chain, target)

@@ -136,7 +136,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "cooldown_minutes": 0,
     "instruments": ["nifty"],
     "strike_mode": "atm",
-    "custom_strike": None,
+    "custom_steps": 0,
     "lots": 1,
     "exit_on_counter_crossover": True,
     "stop_loss_enabled": True,

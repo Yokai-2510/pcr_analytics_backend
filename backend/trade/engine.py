@@ -330,7 +330,7 @@ def _evaluate_one_entry(
         instrument=instrument,
         side=side,
         strike_mode=str(config.get("strike_mode") or "atm"),
-        custom_strike=config.get("custom_strike"),
+        custom_steps=config.get("custom_steps"),
         date=today,
     )
     if leg is None:
