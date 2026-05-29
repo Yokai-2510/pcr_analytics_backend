@@ -12,7 +12,7 @@ Environment=PYTHONUNBUFFERED=1
 #    and runs the full mobile -> OTP -> PIN flow to mint a new access_token.
 ExecStart=/home/ubuntu/index_pcr/.venv/bin/python -c "import logging,sys; logging.basicConfig(level=logging.INFO,format='%(asctime)s [%(levelname)s] %(message)s',stream=sys.stdout); import upstox_auth; r = upstox_auth.refresh_access_token(force=True); print('refresh result:', r)"
 # 2) Restart the worker so it boots with the fresh token in credentials.json.
-ExecStartPost=+/usr/bin/systemctl restart index-pcr-worker.service
+ExecStartPost=+/usr/bin/systemctl restart index-pcr-worker.service index-pcr-api.service
 StandardOutput=journal
 StandardError=journal
 TimeoutStartSec=180
